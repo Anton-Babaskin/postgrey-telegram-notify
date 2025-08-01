@@ -1,35 +1,41 @@
 ````markdown
-# postgrey-telegram-notify
+# 🎉 postgrey-telegram-notify
+![GitHub Workflow](https://img.shields.io/github/actions/workflow/status/Anton-Babaskin/postgrey-telegram-notify/ci.yml?style=flat-square) ![License](https://img.shields.io/github/license/Anton-Babaskin/postgrey-telegram-notify?style=flat-square)
 
-**Monitor Postgrey greylisting events and send notifications to Telegram.**
+> **Monitor Postgrey greylisting events and get real-time alerts in Telegram.**
 
-## Files
+---
 
-- `postgrey_notify_telegram.sh`: script to monitor Postgrey log and forward relevant events to Telegram.
-- `telegram_notify.sh`: helper script defining the `send_telegram()` function using Bot API and environment variables.
+## 🚀 Features
 
-## Prerequisites
+- 🕵️‍♂️ **Log Monitoring**: Scans `/var/log/mail.log` for greylisting triggers.
+- 💬 **Telegram Alerts**: Sends cleanly formatted messages via the Bot API.
+- 🔄 **Automation**: Schedule with Cron or a `systemd` timer.
 
-- Linux server with Postfix and Postgrey installed.
-- Bash, `curl`, and `jq` available in `$PATH`.
-- A Telegram Bot token and chat ID.
-- Permissions to copy scripts to `/usr/local/bin` and create `/etc/miab-notify.env`.
+## 🧰 Requirements
 
-## Installation
+| Component        | Requirement                                   |
+| ---------------- | --------------------------------------------- |
+| OS               | Debian-compatible Linux                       |
+| Services         | Postfix + Postgrey                            |
+| CLI Tools        | Bash, `curl`, `jq`                            |
+| Permissions      | Write `/usr/local/bin`, create `/etc/miab-notify.env` |
+
+## 📦 Installation
 
 ```bash
-# Clone repository and enter directory
+# Clone the repository
 git clone https://github.com/Anton-Babaskin/postgrey-telegram-notify.git
 cd postgrey-telegram-notify
 
-# Make scripts executable and install
+# Install scripts
 sudo chmod +x postgrey_notify_telegram.sh telegram_notify.sh
-sudo cp postgrey_notify_telegram.sh telegram_notify.sh /usr/local/bin/
-````
+sudo mv postgrey_notify_telegram.sh telegram_notify.sh /usr/local/bin/
+```
 
-## Configuration
+## ⚙️ Configuration
 
-1. Create environment file with your credentials:
+1. **Create** `/etc/miab-notify.env` with your bot credentials:
 
    ```bash
    sudo tee /etc/miab-notify.env > /dev/null <<EOF
@@ -37,25 +43,35 @@ sudo cp postgrey_notify_telegram.sh telegram_notify.sh /usr/local/bin/
    CHAT_ID="YOUR_CHAT_ID"
    EOF
    ```
-2. Secure the file:
+
+2. **Lock down** permissions:
 
    ```bash
    sudo chmod 600 /etc/miab-notify.env
    ```
 
-## Usage
+3. **Test** the setup:
 
-* **Manual test:**
+   ```bash
+   source /usr/local/bin/telegram_notify.sh
+   send_telegram "✅ Test alert from $(hostname -f)"
+   ```
+
+## ⏱️ Usage
+
+- **Run manually**:
 
   ```bash
   postgrey_notify_telegram.sh
   ```
-* **Automate via cron:**
+
+- **Cron** (every 5 minutes):
 
   ```cron
   */5 * * * * /usr/local/bin/postgrey_notify_telegram.sh
   ```
-* **Or use a systemd timer:**
+
+- **systemd timer**:
 
   ```ini
   [Unit]
@@ -72,10 +88,14 @@ sudo cp postgrey_notify_telegram.sh telegram_notify.sh /usr/local/bin/
   Persistent=true
   ```
 
-## Scripts
+## 📂 Scripts Overview
 
-<details>
-<summary><code>postgrey_notify_telegram.sh</code></summary>
+| Script                        | Purpose                                        |
+| ----------------------------- | ---------------------------------------------- |
+| `postgrey_notify_telegram.sh` | Monitor greylisting events and forward to Telegram |
+| `telegram_notify.sh`          | Define `send_telegram()` using Bot API         |
+
+### `postgrey_notify_telegram.sh`
 
 ```bash
 #!/usr/bin/env bash
@@ -87,24 +107,22 @@ STATE=/var/lib/postgrey-notify/lastpos
 HOST=$(hostname -f)
 
 mkdir -p "$(dirname "$STATE")"
+
 touch "$STATE"
-last=$(cat "$STATE")
+last=$(<"$STATE")
 total=$(wc -l <"$LOG")
 [ "$total" -le "$last" ] && exit 0
 
-tail -n +"$((last+1))" "$LOG" |
-  awk '/postgrey/ && /(delayed|greylist|greylisted)/ {print}' |
-  while read -r line; do
-    send_telegram "🕒 Postgrey @ ${HOST}\n${line}"
-  done
+tail -n +"$((last+1))" "$LOG" \
+  | awk '/postgrey/ && /(delayed|greylist|greylisted)/' \
+  | while IFS= read -r line; do
+      send_telegram "🕒 Postgrey @ ${HOST}\n${line}"
+    done
 
 echo "$total" >"$STATE"
 ```
 
-</details>
-
-<details>
-<summary><code>telegram_notify.sh</code></summary>
+### `telegram_notify.sh`
 
 ```bash
 #!/usr/bin/env bash
@@ -123,5 +141,13 @@ send_telegram() {
 }
 ```
 
-</details>
-```
+---
+
+## 🤝 Contributing
+
+PRs and issues are welcome. Let’s make greylisting monitoring easier!
+
+## 📄 License
+
+[MIT](LICENSE)
+````
