@@ -1,83 +1,122 @@
 # 🎉 postgrey-telegram-notify
 
-A one-click installer for monitoring Postgrey greylisting events and sending real-time Telegram alerts.
-
----
-
-## 🚀 Features
-
-- **Interactive Setup**: Prompts for your Telegram Bot Token and Chat ID.
-- **All-In-One Script**: Generates the monitoring script and systemd units in one go.
-- **Systemd Timer**: Automatically runs the notifier every 5 minutes.
-- **Clean Notifications**: Parses `/var/log/mail.log` and sends only greylisting events.
+One-script solution: interactive setup on first run, monitors Postgrey greylist events and Postfix delivery statuses, sends Telegram alerts.
 
 ---
 
 ## 🧰 Prerequisites
 
-Ensure you have installed dependencies before running the installer:
+- Debian-compatible Linux with systemd  
+- Bash, curl, jq installed  
+- Write access to `/usr/local/bin` and `/etc`
+
+Ensure dependencies:
 
     sudo apt update && sudo apt install -y curl jq
-
-- Debian-compatible Linux with systemd
-- Bash
-- curl
-- jq
 
 ---
 
 ## 📦 Installation
 
-1. Clone the repository and enter the directory:
+1. Create the notifier script:
 
-git clone https://github.com/Anton-Babaskin/postgrey-telegram-notify.git
+    sudo tee /usr/local/bin/postgrey-telegram-notify.sh > /dev/null <<'EOF'
+    #!/usr/bin/env bash
+    set -euo pipefail
 
-cd postgrey-telegram-notify
+    CONFIG=/etc/postgrey-telegram-notify.conf
+    if [ ! -f "$CONFIG" ]; then
+      read -rp "Telegram Bot Token: " BOT_TOKEN
+      read -rp "Telegram Chat ID: " CHAT_ID
+      sudo tee "$CONFIG" > /dev/null <<CONFIG_EOF
+    BOT_TOKEN="$BOT_TOKEN"
+    CHAT_ID="$CHAT_ID"
+    CONFIG_EOF
+      sudo chmod 600 "$CONFIG"
+      echo "Configuration saved to $CONFIG. Run the script again to start monitoring."
+      exit 0
+    fi
+    source "$CONFIG"
 
-2. Make the installer executable and run it with sudo:
+    send_telegram() {
+      local msg enc
+      msg="$1"
+      enc=$(printf %s "$msg" | sed -e 's/%/%25/g' -e 's/&/%26/g' -e 's/#/%23/g')
+      curl -fsSL --retry 3 --max-time 10 \
+        -d "chat_id=$CHAT_ID&text=$enc" \
+        "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" | jq -e '.ok' >/dev/null
+    }
 
-    chmod +x postgrey_notify.sh
-   
-    sudo ./postgrey_notify.sh
+    LOG=/var/log/mail.log
+    STATE=/var/lib/postgrey-telegram-notify/lastpos
+    HOST=$(hostname -f)
 
-You will be prompted to enter your `BOT_TOKEN` and `CHAT_ID`. The installer will then:
+    mkdir -p "$(dirname "$STATE")"
+    touch "$STATE"
+    last=$(<"$STATE")
+    total=$(wc -l <"$LOG")
+    [ "$total" -le "$last" ] && exit 0
 
-1. Create `/usr/local/bin/postgrey-telegram-notify.sh` — the notifier script.
-2. Generate two systemd units:
+    tail -n +"$((last+1))" "$LOG" | \
+      awk '
+        /postgrey/ && /(delayed|greylist|greylisted)/ { print "GREY", $0 }
+        /postfix\/(smtp|local|lmtp|bounce)/ && /status=(sent|bounced|deferred)/ { print "STAT", $0 }
+      ' | while read -r type body; do
+        if [ "$type" = "GREY" ]; then
+          send_telegram "🕒 Greylist @ $HOST\n$body"
+        else
+          qid=$(echo "$body" | grep -oP '\b[0-9A-F]{10,}\b')
+          rcpt=$(echo "$body" | grep -oP 'to=<\K[^>]+' )
+          status=$(echo "$body" | grep -oP 'status=\K[^ ]+')
+          send_telegram "📬 Delivery @ $HOST\nQueueID: $qid\nTo: $rcpt\nStatus: $status"
+        fi
+      done
 
-       /etc/systemd/system/postgrey-telegram-notify.service
-       /etc/systemd/system/postgrey-telegram-notify.timer
+    echo "$total" >"$STATE"
+    EOF
 
-3. Reload systemd, enable and start the timer.
+2. Make it executable:
 
----
+    sudo chmod +x /usr/local/bin/postgrey-telegram-notify.sh
 
-## 📂 Files
-
-- `postgrey_notify.sh` — interactive installer and script generator.
-- `postgrey-telegram-notify.sh` — generated notifier script (located in `/usr/local/bin`).
-
----
-
-## ⏱️ Usage
-
-- **Test manually**:
+3. Run once to configure:
 
     sudo /usr/local/bin/postgrey-telegram-notify.sh
 
-- **Check timer status**:
-
-    systemctl list-timers postgrey-telegram-notify.timer
-
-- **View logs**:
-
-    journalctl -u postgrey-telegram-notify.service -n 50 --no-pager
-
 ---
 
-## 🤝 Contributing
+## ⏱️ Scheduling
 
-PRs and issues are welcome!
+Create `postgrey-telegram-notify.service` in `/etc/systemd/system/`:
+
+    [Unit]
+    Description=Postgrey Telegram Notify
+
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/local/bin/postgrey-telegram-notify.sh
+
+    [Install]
+    WantedBy=multi-user.target
+
+Create `postgrey-telegram-notify.timer` in `/etc/systemd/system/`:
+
+    [Unit]
+    Description=Run postgrey-telegram-notify every 5 minutes
+
+    [Timer]
+    OnCalendar=*:0/5
+    Persistent=true
+
+    [Install]
+    WantedBy=timers.target
+
+Enable and start:
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now postgrey-telegram-notify.timer
+
+---
 
 ## 📄 License
 
