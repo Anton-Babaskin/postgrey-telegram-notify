@@ -31,6 +31,7 @@ Ensure you have installed dependencies before running the installer:
 1. Clone the repository and enter the directory:
 
 git clone https://github.com/Anton-Babaskin/postgrey-telegram-notify.git
+
 cd postgrey-telegram-notify
 
 2. Make the installer executable and run it with sudo:
