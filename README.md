@@ -37,6 +37,7 @@ cd postgrey-telegram-notify
 2. Make the installer executable and run it with sudo:
 
     chmod +x postgrey_notify.sh
+   
     sudo ./postgrey_notify.sh
 
 You will be prompted to enter your `BOT_TOKEN` and `CHAT_ID`. The installer will then:
