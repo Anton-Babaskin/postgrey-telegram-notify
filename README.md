@@ -1,4 +1,3 @@
-````markdown
 # 🎉 postgrey-telegram-notify
 ![GitHub Workflow](https://img.shields.io/github/actions/workflow/status/Anton-Babaskin/postgrey-telegram-notify/ci.yml?style=flat-square) ![License](https://img.shields.io/github/license/Anton-Babaskin/postgrey-telegram-notify?style=flat-square)
 
@@ -150,4 +149,3 @@ PRs and issues are welcome. Let’s make greylisting monitoring easier!
 ## 📄 License
 
 [MIT](LICENSE)
-````
