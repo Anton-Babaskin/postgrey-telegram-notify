@@ -1,71 +1,96 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 1) Запрашиваем у пользователя данные
-read -rp "Telegram Bot Token: " BOT_TOKEN
-read -rp "Telegram Chat ID: " CHAT_ID
+# Interactive installer for Postgrey → Telegram notifier
+read -rp "Enter your Telegram Bot Token: " BOT_TOKEN
+read -rp "Enter your Telegram Chat ID: " CHAT_ID
 
-# Пути для файлов
-SCRIPT_PATH=/usr/local/bin/postgrey-telegram-notify.sh
-SERVICE_PATH=/etc/systemd/system/postgrey-telegram-notify.service
-TIMER_PATH=/etc/systemd/system/postgrey-telegram-notify.timer
+# Paths configuration
+BIN_DIR=/usr/local/bin
+STATE_DIR=/var/lib/postgrey-telegram-notify
+SERVICE_FILE=/etc/systemd/system/postgrey-telegram-notify.service
+TIMER_FILE=/etc/systemd/system/postgrey-telegram-notify.timer
 
-echo -e "\n🔧 Installing Postgrey → Telegram notify…"
+echo "Installing Postgrey Telegram notifier…"
 
-# 2) Создаём главный скрипт
-sudo tee "$SCRIPT_PATH" > /dev/null <<EOF
+# 1) Create Telegram helper script
+sudo tee "${BIN_DIR}/telegram_notify.sh" > /dev/null <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-BOT_TOKEN="$BOT_TOKEN"
-CHAT_ID="$CHAT_ID"
+# Telegram Bot credentials
+BOT_TOKEN="${BOT_TOKEN}"
+CHAT_ID="${CHAT_ID}"
 
+# Send a message via Telegram Bot API
 send_telegram() {
-  local msg enc
+  local msg encoded
   msg="\$1"
-  enc=\$(printf %s "\$msg" | sed -e 's/%/%25/g' -e 's/&/%26/g' -e 's/#/%23/g')
+  encoded=\$(printf '%s' "\$msg" | sed -e 's/%/%25/g' -e 's/&/%26/g' -e 's/#/%23/g')
   curl -fsSL --retry 3 --max-time 10 \\
-    -d "chat_id=\$CHAT_ID&text=\$enc" \\
-    "https://api.telegram.org/bot\$BOT_TOKEN/sendMessage" | jq -e '.ok' >/dev/null
+    -d "chat_id=\$CHAT_ID&text=\$encoded" \\
+    "https://api.telegram.org/bot\$BOT_TOKEN/sendMessage" \\
+    | jq -e '.ok' >/dev/null
 }
+EOF
+sudo chmod 755 "${BIN_DIR}/telegram_notify.sh"
 
-LOG=/var/log/mail.log
-STATE=/var/lib/postgrey-notify/lastpos
-HOST=\$(hostname -f)
+# 2) Create main notifier script
+sudo tee "${BIN_DIR}/postgrey-telegram-notify.sh" > /dev/null <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
 
-mkdir -p "\$(dirname "\$STATE")"
-touch "\$STATE"
+# Load Telegram helper
+source /usr/local/bin/telegram_notify.sh
 
-last=\$(<"\$STATE")
-total=\$(wc -l <"\$LOG")
+LOG_FILE=/var/log/mail.log
+STATE_FILE=${STATE_DIR}/lastpos
+HOSTNAME=\$(hostname -f)
+
+# Initialize state file
+mkdir -p "\$(dirname "\$STATE_FILE")"
+touch "\$STATE_FILE"
+
+last=\$(<"\$STATE_FILE")
+total=\$(wc -l <"\$LOG_FILE")
 [ "\$total" -le "\$last" ] && exit 0
 
-tail -n +"\$((last+1))" "\$LOG" \\
-  | awk '/postgrey/ && /(delayed|greylist|greylisted)/' \\
-  | while IFS= read -r line; do
-      send_telegram "🕒 Postgrey @ \$HOST\\n\$line"
-    done
+# Parse new log entries for greylist and final delivery status
+tail -n +"\$((last+1))" "\$LOG_FILE" | \
+awk '
+  /postgrey/ && /(delayed|greylist|greylisted)/ { print "GREY", \$0 }
+  /postfix\\/(smtp|local|lmtp|bounce)/ && /status=(sent|bounced|deferred)/ { print "STAT", \$0 }
+' | while read -r type line; do
+  if [ "\$type" = "GREY" ]; then
+    send_telegram "🕒 Greylist @ \$HOSTNAME\n\$line"
+  else
+    id=\$(echo "\$line" | grep -oP '\\b[0-9A-F]{10,}\\b')
+    to=\$(echo "\$line" | grep -oP 'to=<\\K[^>]+')
+    status=\$(echo "\$line" | grep -oP 'status=\\K[^ ]+')
+    send_telegram "📬 Delivery @ \$HOSTNAME\nQueueID: \$id\nTo: \$to\nStatus: \$status"
+  fi
+done
 
-echo "\$total" >"\$STATE"
+# Update state
+echo "\$total" >"\$STATE_FILE"
 EOF
+sudo chmod 755 "${BIN_DIR}/postgrey-telegram-notify.sh"
 
-sudo chmod +x "$SCRIPT_PATH"
-
-# 3) Создаём systemd service
-sudo tee "$SERVICE_PATH" > /dev/null <<'EOF'
+# 3) Create systemd service unit
+sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
-Description=Postgrey Telegram Notify
+Description=Postgrey Telegram Notify Service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/postgrey-telegram-notify.sh
+ExecStart=${BIN_DIR}/postgrey-telegram-notify.sh
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# 4) Создаём systemd timer
-sudo tee "$TIMER_PATH" > /dev/null <<'EOF'
+# 4) Create systemd timer unit
+sudo tee "$TIMER_FILE" > /dev/null <<EOF
 [Unit]
 Description=Run postgrey-telegram-notify every 5 minutes
 
@@ -77,9 +102,9 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-# 5) Перезагружаем демона и включаем таймер
+# 5) Reload systemd and enable timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now postgrey-telegram-notify.timer
 
-echo -e "\n✅ Installation complete! Timer status:"
-systemctl list-timers --no-pager postgrey-telegram-notify.timer
+echo "Installation complete. Timer is active:"
+systemctl list-timers postgrey-telegram-notify.timer --no-pager
